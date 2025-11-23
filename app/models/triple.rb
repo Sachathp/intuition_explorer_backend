@@ -1,0 +1,2 @@
+class Triple < ApplicationRecord
+end

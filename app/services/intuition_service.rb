@@ -1,13 +1,23 @@
 class IntuitionService
   include HTTParty
   
-  # URL de l'API GraphQL d'Intuition
-  base_uri 'https://api.intuition.systems/graphql'
+  # Configuration pour le réseau Intuition
+  # Intuition Network Mainnet (Chain ID: 1155)
+  INTUITION_RPC_URL = 'https://rpc.intuition.systems'
+  # Pour testnet : https://rpc-testnet.intuition.systems (Chain ID: 13579)
+  
+  # URL du Subgraph/Indexer GraphQL (à confirmer avec la communauté)
+  # Utilisation temporaire d'un endpoint de simulation pour développement
+  GRAPHQL_ENDPOINT = ENV['INTUITION_GRAPHQL_URL'] || 'https://portal-api.intuition.systems/graphql'
+  
+  base_uri GRAPHQL_ENDPOINT
   
   def initialize
     @headers = {
-      'Content-Type' => 'application/json'
+      'Content-Type' => 'application/json',
+      'Accept' => 'application/json'
     }
+    @rpc_url = INTUITION_RPC_URL
   end
   
   # Récupère les atoms depuis l'API Intuition

@@ -8,11 +8,18 @@ Rails.application.routes.draw do
   # API routes
   namespace :api do
     namespace :v1 do
-      resources :atoms, only: [:index, :show]
-      get 'search', to: 'search#index'
+      resources :atoms, only: [:index, :show] do
+        member do
+          get 'history'
+        end
+      end
       
-      # Route pour synchroniser les données depuis l'API Intuition
+      get 'search', to: 'search#index'
+      get 'trending', to: 'trending#index'
+      
+      # Routes pour synchroniser les données depuis la blockchain Intuition
       post 'sync', to: 'sync#create'
+      get 'sync/status', to: 'sync#status'
     end
   end
 
