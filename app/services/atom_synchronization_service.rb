@@ -19,11 +19,11 @@ class AtomSynchronizationService
   # ═══════════════════════════════════════════════════════════
   
   # Synchronise les atoms depuis le réseau
-  def sync_atoms(limit: 100)
-    Rails.logger.info "🔄 Début de la synchronisation des Atoms (limit: #{limit})..."
+  def sync_atoms(limit: 100, offset: 0)
+    Rails.logger.info "🔄 Début de la synchronisation des Atoms (limit: #{limit}, offset: #{offset})..."
     
     # Fetch atoms from network
-    network_atoms = @client.fetch_atoms_from_network(limit: limit)
+    network_atoms = @client.fetch_atoms_from_network(limit: limit, offset: offset)
     
     if network_atoms.empty?
       Rails.logger.warn "⚠️  Aucun atom récupéré depuis le réseau"
@@ -88,6 +88,9 @@ class AtomSynchronizationService
         current_signal_value: atom_data[:current_signal_value],
         share_price: atom_data[:share_price],
         total_shares: atom_data[:total_shares],
+        market_cap: atom_data[:market_cap],
+        total_assets: atom_data[:total_assets],
+        positions_shares: atom_data[:positions_shares],
         
         # Statistics
         deposits_count: atom_data[:deposits_count],

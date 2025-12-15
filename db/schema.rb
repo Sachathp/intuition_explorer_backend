@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_11_21_132517) do
+ActiveRecord::Schema[8.0].define(version: 2025_12_15_163523) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -35,12 +35,16 @@ ActiveRecord::Schema[8.0].define(version: 2025_11_21_132517) do
     t.decimal "growth_7d_percent", precision: 10, scale: 4, default: "0.0"
     t.decimal "first_price_24h", precision: 30, scale: 18
     t.decimal "first_price_7d", precision: 30, scale: 18
+    t.decimal "market_cap", precision: 20, scale: 8, default: "0.0"
+    t.decimal "positions_shares", precision: 20, scale: 8, default: "0.0"
+    t.decimal "total_assets", precision: 20, scale: 8, default: "0.0"
     t.index ["block_number"], name: "index_atoms_on_block_number"
     t.index ["creator_id"], name: "index_atoms_on_creator_id"
     t.index ["current_signal_value"], name: "index_atoms_on_current_signal_value"
     t.index ["did"], name: "index_atoms_on_did", unique: true
     t.index ["growth_24h_percent"], name: "index_atoms_on_growth_24h_percent"
     t.index ["growth_7d_percent"], name: "index_atoms_on_growth_7d_percent"
+    t.index ["market_cap"], name: "index_atoms_on_market_cap"
     t.index ["share_price"], name: "index_atoms_on_share_price"
     t.index ["type"], name: "index_atoms_on_type"
   end

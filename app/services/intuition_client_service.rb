@@ -8,6 +8,9 @@ class IntuitionClientService
   # Conversion Wei -> ETH (18 décimales)
   WEI_TO_ETH = 1_000_000_000_000_000_000.0
   
+  # Market cap minimum en Wei (100 TRUST = 100 × 10^18 Wei)
+  MIN_MARKET_CAP_WEI = (100 * WEI_TO_ETH).to_i.to_s
+  
   def initialize
     @config = load_network_config
     @headers = {
@@ -55,10 +58,17 @@ class IntuitionClientService
   # Extraire les atoms avec leurs données complètes
   def fetch_atoms_from_network(options = {})
     limit = options[:limit] || 100
+    offset = options[:offset] || 0
     order_by = options[:order_by] || 'created_at'
     order_direction = options[:order_direction] || 'desc'
     
-    query = build_atoms_query(limit, order_by, order_direction)
+    # Utiliser la méthode avec offset si fourni
+    if offset > 0
+      query = build_atoms_query_with_offset(offset, limit)
+    else
+      query = build_atoms_query(limit, order_by, order_direction)
+    end
+    
     result = execute_graphql_query(query)
     
     return [] unless result && result['atoms']
@@ -157,7 +167,8 @@ class IntuitionClientService
       query {
         atoms(
           limit: #{limit}, 
-          order_by: { #{order_by}: #{order_direction} }
+          order_by: { #{order_by}: #{order_direction} },
+          where: { term: { total_market_cap: { _gt: "#{MIN_MARKET_CAP_WEI}" } } }
         ) {
           term_id
           label
@@ -169,6 +180,19 @@ class IntuitionClientService
           created_at
           term {
             id
+            total_market_cap
+            total_assets
+            vaults(order_by: {market_cap: desc}, limit: 1) {
+              current_share_price
+              market_cap
+              total_assets
+              total_shares
+              position_count
+            }
+            share_price_changes(limit: 1, order_by: {block_number: desc}) {
+              share_price
+              block_number
+            }
             deposits_aggregate {
               aggregate {
                 sum {
@@ -181,6 +205,9 @@ class IntuitionClientService
             positions_aggregate {
               aggregate {
                 count
+                sum {
+                  shares
+                }
               }
             }
             share_price_change_stats_daily(
@@ -211,7 +238,8 @@ class IntuitionClientService
         atoms(
           offset: #{offset},
           limit: #{limit}, 
-          order_by: { created_at: desc }
+          order_by: { created_at: desc },
+          where: { term: { total_market_cap: { _gt: "#{MIN_MARKET_CAP_WEI}" } } }
         ) {
           term_id
           label
@@ -223,6 +251,19 @@ class IntuitionClientService
           created_at
           term {
             id
+            total_market_cap
+            total_assets
+            vaults(order_by: {market_cap: desc}, limit: 1) {
+              current_share_price
+              market_cap
+              total_assets
+              total_shares
+              position_count
+            }
+            share_price_changes(limit: 1, order_by: {block_number: desc}) {
+              share_price
+              block_number
+            }
             deposits_aggregate {
               aggregate {
                 sum {
@@ -235,6 +276,9 @@ class IntuitionClientService
             positions_aggregate {
               aggregate {
                 count
+                sum {
+                  shares
+                }
               }
             }
             share_price_change_stats_daily(
@@ -275,6 +319,19 @@ class IntuitionClientService
           emoji
           term {
             id
+            total_market_cap
+            total_assets
+            vaults(order_by: {market_cap: desc}, limit: 1) {
+              current_share_price
+              market_cap
+              total_assets
+              total_shares
+              position_count
+            }
+            share_price_changes(limit: 1, order_by: {block_number: desc}) {
+              share_price
+              block_number
+            }
             deposits_aggregate {
               aggregate {
                 sum {
@@ -287,6 +344,9 @@ class IntuitionClientService
             positions_aggregate {
               aggregate {
                 count
+                sum {
+                  shares
+                }
               }
             }
             share_price_change_stats_daily(
@@ -300,7 +360,6 @@ class IntuitionClientService
             }
           }
           as_subject_triples(limit: 20) {
-            id
             predicate: term_object {
               term_id
               label
@@ -320,7 +379,6 @@ class IntuitionClientService
       query {
         as_subject: atoms(where: { term_id: { _eq: "#{atom_id}" } }) {
           as_subject_triples(limit: 20) {
-            id
             subject: term_subject { term_id label }
             predicate: term_object { term_id label }
             object: term_object_1 { term_id label }
@@ -328,7 +386,6 @@ class IntuitionClientService
         }
         as_predicate: atoms(where: { term_id: { _eq: "#{atom_id}" } }) {
           as_predicate_triples(limit: 20) {
-            id
             subject: term_subject { term_id label }
             predicate: term_object { term_id label }
             object: term_object_1 { term_id label }
@@ -336,7 +393,6 @@ class IntuitionClientService
         }
         as_object: atoms(where: { term_id: { _eq: "#{atom_id}" } }) {
           as_object_triples(limit: 20) {
-            id
             subject: term_subject { term_id label }
             predicate: term_object { term_id label }
             object: term_object_1 { term_id label }
@@ -371,8 +427,36 @@ class IntuitionClientService
   def parse_atom(atom_data)
     term = atom_data['term']
     deposits = term&.dig('deposits_aggregate', 'aggregate')
+    positions = term&.dig('positions_aggregate', 'aggregate')
     stats_daily = term&.dig('share_price_change_stats_daily')&.first
     stats_weekly = term&.dig('share_price_change_stats_weekly')&.first
+    # Récupérer le dernier changement de prix (prix actuel)
+    latest_price_change = term&.dig('share_price_changes')&.first
+    
+    # IMPORTANT: Récupérer le vault principal (avec le plus gros market_cap)
+    # C'est ce vault qui contient le vrai current_share_price
+    main_vault = term&.dig('vaults')&.first
+    
+    # Log pour déboguer les valeurs brutes
+    if main_vault
+      Rails.logger.debug "🔍 Main vault current_share_price (atom: #{atom_data['term_id']}): #{main_vault['current_share_price']}"
+    end
+    
+    # Récupérer le share_price du vault principal (prioritaire) ou fallback sur l'ancien système
+    if main_vault && main_vault['current_share_price']
+      share_price_value = convert_wei_to_eth(main_vault['current_share_price'])
+      Rails.logger.debug "💰 Using vault share_price: #{share_price_value} TRUST"
+    else
+      share_price_value = get_share_price(latest_price_change, stats_daily, stats_weekly)
+      Rails.logger.debug "💰 Using fallback share_price: #{share_price_value} TRUST"
+    end
+    
+    positions_shares = convert_wei_to_eth(positions&.dig('sum', 'shares'))
+    
+    # IMPORTANT: Utiliser total_market_cap et total_assets directement de l'API
+    # Ces valeurs sont calculées par Intuition et correspondent à leur interface officielle
+    total_market_cap_from_api = convert_wei_to_eth(term&.dig('total_market_cap'))
+    total_assets_from_api = convert_wei_to_eth(term&.dig('total_assets'))
     
     {
       did: atom_data['term_id'],
@@ -382,14 +466,23 @@ class IntuitionClientService
       creator: atom_data['creator_id'],
       wallet: atom_data['wallet_id'],
       
-      # Métriques financières (conversion Wei -> ETH)
+      # Métriques financières (conversion Wei -> TRUST)
+      # Signal Value = Total des assets déposés (assets_after_fees)
       current_signal_value: convert_wei_to_eth(deposits&.dig('sum', 'assets_after_fees')),
-      share_price: convert_wei_to_eth(stats_daily&.dig('last_share_price')),
+      # Market Cap = Valeur directe de l'API (calculée par Intuition)
+      market_cap: total_market_cap_from_api,
+      # Total Assets = Valeur directe de l'API
+      total_assets: total_assets_from_api,
+      # Share Price = Prix actuel depuis share_price_changes (dernier changement), avec fallback sur stats
+      share_price: share_price_value,
+      # Total Shares = Shares dans les dépôts (total locked)
       total_shares: convert_wei_to_eth(deposits&.dig('sum', 'shares')),
+      # Positions Shares = Shares détenues par les holders actifs
+      positions_shares: positions_shares,
       
       # Statistiques
       deposits_count: deposits&.dig('count') || 0,
-      positions_count: term&.dig('positions_aggregate', 'aggregate', 'count') || 0,
+      positions_count: positions&.dig('count') || 0,
       
       # Prix de référence pour calcul de croissance (24h)
       first_price_24h: convert_wei_to_eth(stats_daily&.dig('first_share_price')),
@@ -410,13 +503,19 @@ class IntuitionClientService
     
     # Ajouter les triples
     triples = atom_data['as_subject_triples']&.map do |triple|
+      # Générer un ID unique basé sur la combinaison sujet-prédicat-objet
+      subject_id = atom_data['term_id']
+      predicate_id = triple.dig('predicate', 'term_id')
+      object_id = triple.dig('object', 'term_id')
+      triple_id = "#{subject_id}-#{predicate_id}-#{object_id}"
+      
       {
-        id: triple['id'],
-        subject_id: atom_data['term_id'],
+        id: triple_id,
+        subject_id: subject_id,
         subject_label: atom_data['label'],
-        predicate_id: triple.dig('predicate', 'term_id'),
+        predicate_id: predicate_id,
         predicate_label: triple.dig('predicate', 'label'),
-        object_id: triple.dig('object', 'term_id'),
+        object_id: object_id,
         object_label: triple.dig('object', 'label')
       }
     end || []
@@ -439,13 +538,19 @@ class IntuitionClientService
       triples = atoms.first[key] || []
       
       triples.each do |triple|
+        # Générer un ID unique basé sur la combinaison sujet-prédicat-objet
+        subject_id = triple.dig('subject', 'term_id')
+        predicate_id = triple.dig('predicate', 'term_id')
+        object_id = triple.dig('object', 'term_id')
+        triple_id = "#{subject_id}-#{predicate_id}-#{object_id}"
+        
         all_triples << {
-          id: triple['id'],
-          subject_id: triple.dig('subject', 'term_id'),
+          id: triple_id,
+          subject_id: subject_id,
           subject_label: triple.dig('subject', 'label'),
-          predicate_id: triple.dig('predicate', 'term_id'),
+          predicate_id: predicate_id,
           predicate_label: triple.dig('predicate', 'label'),
-          object_id: triple.dig('object', 'term_id'),
+          object_id: object_id,
           object_label: triple.dig('object', 'label'),
           role: role
         }
@@ -455,9 +560,67 @@ class IntuitionClientService
     all_triples.uniq { |t| t[:id] }
   end
   
-  # Conversion Wei (18 décimales) vers ETH
+  # Conversion Wei (18 décimales) vers TRUST/ETH
   def convert_wei_to_eth(value)
     return 0.0 if value.nil? || value.to_s.empty? || value.to_s == "0"
     value.to_f / WEI_TO_ETH
+  end
+  
+  # Récupère le prix des shares avec priorité sur le dernier changement de prix
+  def get_share_price(latest_price_change, stats_daily, stats_weekly)
+    # Priorité 1: share_price depuis le dernier changement (prix spot actuel)
+    if latest_price_change && latest_price_change['share_price']
+      raw_price = latest_price_change['share_price']
+      # Détecter si la valeur est déjà en TRUST (petite valeur) ou en Wei (très grande valeur)
+      price = normalize_price(raw_price)
+      if price > 0
+        Rails.logger.debug "💰 Share price from latest change: #{price} TRUST (raw: #{raw_price}, block: #{latest_price_change['block_number']})"
+        return price
+      end
+    end
+    
+    # Priorité 2: last_share_price des stats journalières
+    if stats_daily && stats_daily['last_share_price']
+      raw_price = stats_daily['last_share_price']
+      price = normalize_price(raw_price)
+      if price > 0
+        Rails.logger.debug "💰 Share price from daily stats: #{price} TRUST (raw: #{raw_price})"
+        return price
+      end
+    end
+    
+    # Priorité 3: last_share_price des stats hebdomadaires
+    if stats_weekly && stats_weekly['last_share_price']
+      raw_price = stats_weekly['last_share_price']
+      price = normalize_price(raw_price)
+      if price > 0
+        Rails.logger.debug "💰 Share price from weekly stats: #{price} TRUST (raw: #{raw_price})"
+        return price
+      end
+    end
+    
+    # Fallback: 0 si aucune valeur disponible
+    Rails.logger.warn "⚠️  No share price found - latest_change: #{latest_price_change&.dig('share_price')}, daily: #{stats_daily&.dig('last_share_price')}, weekly: #{stats_weekly&.dig('last_share_price')}"
+    0.0
+  end
+  
+  # Normalise le prix : détecte si c'est déjà en TRUST ou en Wei
+  def normalize_price(raw_value)
+    return 0.0 if raw_value.nil? || raw_value.to_s.empty? || raw_value.to_s == "0"
+    
+    value = raw_value.to_f
+    
+    # Si la valeur est très grande (> 1e15), c'est probablement en Wei, on convertit
+    # Si la valeur est petite (< 1e15), c'est probablement déjà en TRUST
+    if value > 1_000_000_000_000_000 # 1e15
+      # Conversion Wei -> TRUST
+      converted = value / WEI_TO_ETH
+      Rails.logger.debug "🔢 Price appears to be in Wei: #{value} -> #{converted} TRUST"
+      converted
+    else
+      # Déjà en TRUST
+      Rails.logger.debug "🔢 Price appears to be already in TRUST: #{value}"
+      value
+    end
   end
 end

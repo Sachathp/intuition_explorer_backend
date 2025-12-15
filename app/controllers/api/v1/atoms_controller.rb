@@ -2,10 +2,11 @@ class Api::V1::AtomsController < ApplicationController
   before_action :set_atom, only: [:show, :history]
   
   # GET /api/v1/atoms
-  # Retourne les atoms triés par signal value décroissant
+  # Retourne les atoms triés par market cap décroissant
+  # Filtre uniquement les atoms avec market cap > 100 Trust
   def index
     limit = params[:limit]&.to_i || 50
-    atoms = Atom.top_by_signal.limit(limit)
+    atoms = Atom.with_minimum_market_cap.top_by_market_cap.limit(limit)
     
     render json: {
       atoms: atoms.as_json(
@@ -13,11 +14,11 @@ class Api::V1::AtomsController < ApplicationController
           :id, :did, :description, :current_signal_value, :share_price, 
           :created_at, :updated_at, :image, :type, :creator_id, :wallet_id,
           :block_number, :emoji, :total_shares, :deposits_count, :positions_count,
-          :growth_24h_percent, :growth_7d_percent
+          :growth_24h_percent, :growth_7d_percent, :market_cap, :total_assets, :positions_shares
         ]
       ),
       count: atoms.count,
-      total: Atom.count,
+      total: Atom.with_minimum_market_cap.count,
       network: intuition_config[:network],
       chain_id: active_network_config[:chain_id]
     }
@@ -32,7 +33,7 @@ class Api::V1::AtomsController < ApplicationController
         :created_at, :updated_at, :image, :type, :creator_id, :wallet_id,
         :block_number, :emoji, :data, :total_shares, :deposits_count,
         :positions_count, :growth_24h_percent, :growth_7d_percent,
-        :first_price_24h, :first_price_7d
+        :first_price_24h, :first_price_7d, :market_cap, :total_assets, :positions_shares
       ]
     )
     

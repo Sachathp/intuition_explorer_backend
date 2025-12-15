@@ -98,7 +98,7 @@ class BatchSynchronizationService
   
   # Synchronise un batch spécifique
   def sync_batch(offset, limit)
-    atoms_data = @client.fetch_atoms_paginated(offset: offset, limit: limit)
+    atoms_data = @client.fetch_atoms_with_pagination(offset: offset, limit: limit)
     
     return { fetched: 0, created: 0, updated: 0, errors: 0 } if atoms_data.empty?
     

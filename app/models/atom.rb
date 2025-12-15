@@ -6,9 +6,29 @@ class Atom < ApplicationRecord
   
   validates :did, presence: true, uniqueness: true
   
+  # Seuil minimum de market cap (100 Trust)
+  MINIMUM_MARKET_CAP = 100.0
+  
   # Scopes pour le classement
+  scope :top_by_market_cap, -> { order(market_cap: :desc) }
   scope :top_by_signal, -> { order(current_signal_value: :desc) }
   scope :top_by_share_price, -> { order(share_price: :desc) }
+  
+  # Scope pour filtrer les atoms avec un market cap minimum
+  # IMPORTANT: Pour l'instant on utilise current_signal_value comme proxy du market cap
+  # car la vraie formule du market cap Intuition n'est pas share_price × total_shares
+  scope :with_minimum_market_cap, -> { where('current_signal_value > ?', MINIMUM_MARKET_CAP) }
+  
+  # Le market cap est désormais fourni directement par l'API Intuition
+  # Il ne nécessite pas de calcul supplémentaire, la valeur est déjà correcte
+  def calculate_market_cap
+    # Le market_cap est défini lors du sync avec l'API
+    # On s'assure juste qu'il a une valeur par défaut
+    self.market_cap ||= 0.0
+  end
+  
+  # Hook pour calculer le market cap avant sauvegarde
+  before_save :calculate_market_cap
   
   # Méthode de recherche lexicale simple
   def self.search(query)
