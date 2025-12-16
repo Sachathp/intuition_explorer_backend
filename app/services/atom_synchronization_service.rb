@@ -125,22 +125,52 @@ class AtomSynchronizationService
   # ÉTAPE 2.3: Calcul de Croissance
   # ═══════════════════════════════════════════════════════════
   
-  # Calcule les pourcentages de croissance sur 24h et 7 jours
+  # Calcule les pourcentages de croissance sur différentes périodes
   def calculate_growth_percentages(atom)
-    # Calcul croissance 24h
+    # Calcul croissance 1h (basé sur historical_signals)
+    calculate_growth_from_history(atom, 1, :growth_1h_percent, :first_price_1h)
+    
+    # Calcul croissance 4h (basé sur historical_signals)
+    calculate_growth_from_history(atom, 4, :growth_4h_percent, :first_price_4h)
+    
+    # Calcul croissance 24h (depuis l'API)
     if atom.first_price_24h.present? && atom.first_price_24h > 0
       atom.growth_24h_percent = calculate_percentage_change(
         atom.first_price_24h, 
         atom.share_price
       )
+    else
+      # Fallback sur historical_signals si pas de données API
+      calculate_growth_from_history(atom, 24, :growth_24h_percent, :first_price_24h)
     end
     
-    # Calcul croissance 7 jours
+    # Calcul croissance 7 jours (depuis l'API)
     if atom.first_price_7d.present? && atom.first_price_7d > 0
       atom.growth_7d_percent = calculate_percentage_change(
         atom.first_price_7d, 
         atom.share_price
       )
+    else
+      # Fallback sur historical_signals si pas de données API
+      calculate_growth_from_history(atom, 168, :growth_7d_percent, :first_price_7d)
+    end
+  end
+  
+  # Calcule la croissance basée sur les données historiques
+  def calculate_growth_from_history(atom, hours_ago, growth_field, price_field)
+    return unless atom.persisted? # Skip si l'atom n'est pas encore sauvegardé
+    
+    old_signal = atom.historical_signals
+                     .where('recorded_at <= ?', hours_ago.hours.ago)
+                     .order(recorded_at: :desc)
+                     .first
+    
+    if old_signal && old_signal.share_price.present? && old_signal.share_price > 0
+      atom.send("#{price_field}=", old_signal.share_price)
+      atom.send("#{growth_field}=", calculate_percentage_change(
+        old_signal.share_price,
+        atom.share_price
+      ))
     end
   end
   

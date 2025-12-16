@@ -52,24 +52,44 @@ class Api::V1::AtomsController < ApplicationController
   
   # GET /api/v1/atoms/:id/history
   # Retourne l'historique des valeurs pour les graphiques
+  # Supporte: ?days=7 (défaut) ou ?hours=1, ?hours=4
   def history
-    days = params[:days]&.to_i || 7
-    
-    history_data = @atom.history_for_chart(days).map do |record|
-      {
-        timestamp: record.recorded_at.iso8601,
-        signal_value: record.signal_value.to_f,
-        share_price: record.share_price.to_f
+    if params[:hours]
+      hours = params[:hours].to_i
+      history_data = @atom.history_for_chart_hours(hours).map do |record|
+        {
+          timestamp: record.recorded_at.iso8601,
+          signal_value: record.signal_value.to_f,
+          share_price: record.share_price.to_f
+        }
+      end
+      
+      render json: {
+        atom_id: @atom.id,
+        atom_did: @atom.did,
+        period_hours: hours,
+        data: history_data,
+        count: history_data.count
+      }
+    else
+      days = params[:days]&.to_i || 7
+      
+      history_data = @atom.history_for_chart(days).map do |record|
+        {
+          timestamp: record.recorded_at.iso8601,
+          signal_value: record.signal_value.to_f,
+          share_price: record.share_price.to_f
+        }
+      end
+      
+      render json: {
+        atom_id: @atom.id,
+        atom_did: @atom.did,
+        period_days: days,
+        data: history_data,
+        count: history_data.count
       }
     end
-    
-    render json: {
-      atom_id: @atom.id,
-      atom_did: @atom.did,
-      period_days: days,
-      data: history_data,
-      count: history_data.count
-    }
   end
   
   private

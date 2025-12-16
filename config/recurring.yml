@@ -13,3 +13,20 @@ production:
   clear_solid_queue_finished_jobs:
     command: "SolidQueue::Job.clear_finished_in_batches(sleep_between_batches: 0.3)"
     schedule: every hour at minute 12
+  
+  # Synchronisation automatique des atoms toutes les 6 heures
+  # Met à jour les données existantes (market cap, share price, etc.)
+  sync_atoms_update:
+    class: SyncAtomsJob
+    args: [ { mode: 'update', limit: 1000 } ]
+    queue: default
+    schedule: every 6 hours
+
+development:
+  # En développement, on peut tester avec une fréquence plus courte
+  # Décommenter pour activer en dev (sync toutes les heures)
+  # sync_atoms_update:
+  #   class: SyncAtomsJob
+  #   args: [ { mode: 'update', limit: 100 } ]
+  #   queue: default
+  #   schedule: every hour

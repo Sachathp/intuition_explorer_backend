@@ -76,4 +76,12 @@ class Atom < ApplicationRecord
       .order(recorded_at: :asc)
       .select(:recorded_at, :signal_value, :share_price)
   end
+  
+  # Historique pour graphique (dernières N heures)
+  def history_for_chart_hours(hours = 1)
+    historical_signals
+      .where('recorded_at >= ?', hours.hours.ago)
+      .order(recorded_at: :asc)
+      .select(:recorded_at, :signal_value, :share_price)
+  end
 end
