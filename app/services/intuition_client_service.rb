@@ -122,6 +122,30 @@ class IntuitionClientService
     }
   end
   
+  # ═══════════════════════════════════════════════════════════
+  # POSITIONS UTILISATEUR (Wallet)
+  # ═══════════════════════════════════════════════════════════
+  
+  # Récupère les positions d'un compte (atoms + triples)
+  def fetch_positions_for_account(address, limit: 50, offset: 0)
+    query = build_positions_query(address, limit, offset)
+    result = execute_graphql_query(query)
+    
+    return [] unless result && result['positions']
+    
+    parse_positions(result['positions'], address)
+  end
+  
+  # Récupère les deposits d'un utilisateur pour un term_id spécifique
+  def fetch_user_deposits(address, term_id)
+    query = build_user_deposits_query(address, term_id)
+    result = execute_graphql_query(query)
+    
+    return [] unless result && result['deposits']
+    
+    result['deposits']
+  end
+  
   private
   
   # ═══════════════════════════════════════════════════════════
@@ -414,6 +438,85 @@ class IntuitionClientService
     GRAPHQL
   end
   
+  def build_user_deposits_query(address, term_id)
+    <<~GRAPHQL
+      query {
+        deposits(
+          where: {
+            receiver_id: { _eq: "#{address}" },
+            term_id: { _eq: "#{term_id}" }
+          },
+          order_by: { block_number: asc }
+        ) {
+          id
+          shares
+          assets_after_fees
+          created_at
+          block_number
+        }
+      }
+    GRAPHQL
+  end
+  
+  def build_positions_query(address, limit, offset)
+    <<~GRAPHQL
+      query {
+        positions(
+          where: { account_id: { _eq: "#{address}" } },
+          limit: #{limit},
+          offset: #{offset},
+          order_by: { shares: desc }
+        ) {
+          id
+          account_id
+          shares
+          term_id
+          created_at
+          updated_at
+          vault {
+            current_share_price
+            total_shares
+            total_assets
+            market_cap
+            term_id
+            curve_id
+            term {
+              atom {
+                term_id
+                label
+                image
+                emoji
+                type
+              }
+              triple {
+                subject_id
+                predicate_id
+                object_id
+                subject { term_id label image }
+                predicate { term_id label }
+                object { term_id label image }
+              }
+              share_price_change_stats_daily(
+                limit: 1, 
+                order_by: { bucket: desc }
+              ) {
+                first_share_price
+                last_share_price
+              }
+              share_price_change_stats_weekly(
+                limit: 1, 
+                order_by: { bucket: desc }
+              ) {
+                first_share_price
+                last_share_price
+              }
+            }
+          }
+        }
+      }
+    GRAPHQL
+  end
+  
   # ═══════════════════════════════════════════════════════════
   # PARSING DES RÉSULTATS
   # ═══════════════════════════════════════════════════════════
@@ -558,6 +661,175 @@ class IntuitionClientService
     end
     
     all_triples.uniq { |t| t[:id] }
+  end
+  
+  def parse_positions(positions_data, user_address)
+    # Initialiser le calculateur de valeur
+    value_calculator = VaultValueCalculatorService.new
+    
+    positions_data.map do |position|
+      vault = position['vault']
+      term = vault&.dig('term')
+      atom = term&.dig('atom')
+      triple = term&.dig('triple')
+      
+      shares = convert_wei_to_eth(position['shares'])
+      shares_wei = position['shares'] # Garder la valeur en Wei
+      current_share_price = convert_wei_to_eth(vault&.dig('current_share_price'))
+      
+      # Calculer une valeur approximative basée sur le slippage de la bonding curve
+      vault_total_shares_wei = vault&.dig('total_shares')
+      current_share_price_wei = vault&.dig('current_share_price')
+      vault_curve_id = vault&.dig('curve_id')
+      
+      approximate_value = if shares_wei && vault_total_shares_wei && current_share_price_wei
+                            value_calculator.calculate_redeem_value_approximate(
+                              shares_wei,
+                              vault_total_shares_wei,
+                              current_share_price_wei
+                            )
+                          else
+                            # Fallback sur le calcul naïf si données manquantes
+                            shares * current_share_price
+                          end
+      
+      position_value = approximate_value
+      value_source = 'bonding_curve_approximation'
+      
+      # Calculer le prix d'achat moyen et le P&L personnel
+      term_id = vault['term_id']
+      entry_data = calculate_entry_price_and_pnl(user_address, term_id, position_value, shares)
+      
+      # Stats de croissance (communes aux deux types)
+      stats_daily = term&.dig('share_price_change_stats_daily')&.first
+      stats_weekly = term&.dig('share_price_change_stats_weekly')&.first
+      growth_24h = calculate_growth_from_stats(stats_daily)
+      growth_7d = calculate_growth_from_stats(stats_weekly)
+      
+      # Déterminer si c'est un atom ou un triple
+      if atom
+        # Position sur un atom
+        {
+          position_id: position['id'],
+          entity_type: 'atom',
+          term_id: atom['term_id'],
+          label: atom['label'],
+          image: atom['image'],
+          emoji: atom['emoji'],
+          type: atom['type'],
+          shares: shares,
+          current_share_price: current_share_price,
+          value: position_value,
+          value_source: value_source,
+          entry_price: entry_data[:entry_price],
+          total_cost: entry_data[:total_cost],
+          pnl_percent: entry_data[:pnl_percent],
+          pnl_amount: entry_data[:pnl_amount],
+          growth_24h_percent: growth_24h,
+          growth_7d_percent: growth_7d,
+          vault_term_id: vault['term_id'],
+          vault_id: vault_curve_id,
+          created_at: position['created_at']
+        }
+      elsif triple
+        # Position sur un triple
+        {
+          position_id: position['id'],
+          entity_type: 'triple',
+          term_id: vault['term_id'], # L'ID du term pour référence
+          subject_id: triple['subject_id'],
+          subject_label: triple.dig('subject', 'label'),
+          subject_image: triple.dig('subject', 'image'),
+          predicate_id: triple['predicate_id'],
+          predicate_label: triple.dig('predicate', 'label'),
+          object_id: triple['object_id'],
+          object_label: triple.dig('object', 'label'),
+          object_image: triple.dig('object', 'image'),
+          label: "#{triple.dig('subject', 'label')} — #{triple.dig('predicate', 'label')} — #{triple.dig('object', 'label')}",
+          shares: shares,
+          current_share_price: current_share_price,
+          value: position_value,
+          value_source: value_source,
+          entry_price: entry_data[:entry_price],
+          total_cost: entry_data[:total_cost],
+          pnl_percent: entry_data[:pnl_percent],
+          pnl_amount: entry_data[:pnl_amount],
+          growth_24h_percent: growth_24h,
+          growth_7d_percent: growth_7d,
+          vault_term_id: vault['term_id'],
+          vault_id: vault_curve_id,
+          created_at: position['created_at']
+        }
+      else
+        # Fallback si ni atom ni triple (ne devrait pas arriver)
+        Rails.logger.warn "⚠️  Position #{position['id']} sans atom ni triple"
+        nil
+      end
+    end.compact
+  end
+  
+  # Calcule le prix d'achat moyen et le P&L pour une position
+  def calculate_entry_price_and_pnl(user_address, term_id, current_value, current_shares)
+    begin
+      # Récupérer tous les deposits de l'utilisateur pour ce term
+      deposits = fetch_user_deposits(user_address, term_id)
+      
+      if deposits.empty?
+        Rails.logger.debug "⚠️  No deposits found for #{term_id}"
+        return { entry_price: nil, total_cost: nil, pnl_percent: nil, pnl_amount: nil }
+      end
+      
+      # Calculer le coût moyen pondéré (WACC - Weighted Average Cost)
+      total_assets_paid = 0.0
+      total_shares_bought = 0.0
+      
+      deposits.each do |deposit|
+        assets = convert_wei_to_eth(deposit['assets_after_fees'])
+        shares = convert_wei_to_eth(deposit['shares'])
+        
+        total_assets_paid += assets
+        total_shares_bought += shares
+      end
+      
+      # Prix moyen d'achat par share
+      average_entry_price = total_assets_paid / total_shares_bought
+      
+      # Calcul du P&L
+      # Note: current_shares peut être différent de total_shares_bought si l'utilisateur a vendu
+      # On utilise les shares actuels pour calculer le coût de base
+      cost_basis = current_shares * average_entry_price
+      pnl_amount = current_value - cost_basis
+      pnl_percent = (pnl_amount / cost_basis * 100.0).round(2)
+      
+      Rails.logger.debug "💰 P&L Calculation:"
+      Rails.logger.debug "   Entry price: #{average_entry_price.round(4)} TRUST/share"
+      Rails.logger.debug "   Total cost: #{cost_basis.round(2)} TRUST"
+      Rails.logger.debug "   Current value: #{current_value.round(2)} TRUST"
+      Rails.logger.debug "   P&L: #{pnl_percent}% (#{pnl_amount > 0 ? '+' : ''}#{pnl_amount.round(2)} TRUST)"
+      
+      {
+        entry_price: average_entry_price.round(6),
+        total_cost: cost_basis.round(2),
+        pnl_percent: pnl_percent,
+        pnl_amount: pnl_amount.round(2)
+      }
+      
+    rescue StandardError => e
+      Rails.logger.error "❌ Error calculating entry price: #{e.message}"
+      { entry_price: nil, total_cost: nil, pnl_percent: nil, pnl_amount: nil }
+    end
+  end
+  
+  # Calcule la croissance à partir des stats (daily/weekly)
+  def calculate_growth_from_stats(stats)
+    return 0.0 unless stats
+    
+    first_price = convert_wei_to_eth(stats['first_share_price'])
+    last_price = convert_wei_to_eth(stats['last_share_price'])
+    
+    return 0.0 if first_price.zero?
+    
+    ((last_price - first_price) / first_price * 100.0).round(2)
   end
   
   # Conversion Wei (18 décimales) vers TRUST/ETH

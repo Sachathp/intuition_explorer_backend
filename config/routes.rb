@@ -17,6 +17,9 @@ Rails.application.routes.draw do
       get 'search', to: 'search#index'
       get 'trending', to: 'trending#index'
       
+      # Routes pour les positions wallet
+      get 'positions', to: 'positions#index'
+      
       # Routes pour synchroniser les données depuis la blockchain Intuition
       post 'sync', to: 'sync#create'
       get 'sync/status', to: 'sync#status'
